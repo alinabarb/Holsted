@@ -35,7 +35,7 @@ _STMT_START_KEYWORDS = {
     'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
     'return', 'break', 'continue', 'goto',
 }
-
+_DECL_KEYWORDS = {'enum', 'struct', 'class', 'union', 'typedef'}
 
 class GilbParser:
     def __init__(self, tokens):
@@ -71,6 +71,27 @@ class GilbParser:
         while self.pos < self.n:
             self.parse_statement(depth=0)
 
+    def parse_type_declaration(self, depth):
+        """Пропускает объявление enum/struct/class/union/typedef,
+        не считая его оператором."""
+        # пропускаем само ключевое слово
+        self.advance()
+
+        # пропускаем имя типа и всё до '{' или ';'
+        while self.pos < self.n and self.peek() not in ('{', ';', None):
+            self.advance()
+
+        if self.peek() == '{':
+            # пропускаем тело { ... }
+            self.skip_balanced('{', '}')
+            # после тела может быть ';' или имя переменной
+            while self.pos < self.n and self.peek() not in (';', None):
+                self.advance()
+            if self.peek() == ';':
+                self.advance()
+        elif self.peek() == ';':
+            self.advance()
+
     def parse_statement(self, depth):
         t = self.peek()
         if t is None:
@@ -78,10 +99,10 @@ class GilbParser:
 
         nxt = self.peek(1)
         if (
-            t not in _STMT_START_KEYWORDS
-            and re.match(r'[A-Za-z_]\w*$', t)
-            and nxt == ':'
-            and self.peek(2) != ':'
+                t not in _STMT_START_KEYWORDS
+                and re.match(r'[A-Za-z_]\w*$', t)
+                and nxt == ':'
+                and self.peek(2) != ':'
         ):
             self.advance()
             self.advance()
@@ -98,6 +119,17 @@ class GilbParser:
             self.parse_switch(depth)
         elif t in ('case', 'default'):
             self.parse_case_label(depth)
+        elif t == 'try':
+            self.advance()
+            self.parse_body(depth)
+            if self.peek() == 'catch':
+                self.advance()
+                if self.peek() == '(':
+                    self.skip_balanced('(', ')')
+                self.parse_body(depth)
+            return
+        elif t in _DECL_KEYWORDS:  # ← НОВАЯ ВЕТКА
+            self.parse_type_declaration(depth)
         else:
             self.parse_simple(depth)
 
@@ -118,8 +150,7 @@ class GilbParser:
 
     def parse_if(self, depth):
         self.CL += 1
-        self.total_operators += 1
-        self.max_depth = max(self.max_depth, depth)
+        self.max_depth = max(self.max_depth, depth + 1)
 
         self.advance()
         if self.peek() == '(':
@@ -159,8 +190,7 @@ class GilbParser:
         if branches >= 1:
             equiv_cl = max(branches - 1, 0)
             self.CL += equiv_cl
-            self.total_operators += equiv_cl
-        equiv_depth = depth + max(branches - 2, 0)
+        equiv_depth = depth + 1 + max(branches - 2, 0)
         self.max_depth = max(self.max_depth, equiv_depth)
 
         if self.peek() == '{':
@@ -176,7 +206,6 @@ class GilbParser:
             self.advance()
 
     def parse_loop(self, depth, kind):
-        self.total_operators += 1
         self.advance()
 
         if kind in ('for', 'while'):
@@ -199,7 +228,6 @@ class GilbParser:
             t = self.advance()
             if t == '?':
                 self.CL += 1
-                self.total_operators += 1
                 self.max_depth = max(self.max_depth, depth)
             elif t == '(':
                 paren_depth += 1
@@ -215,6 +243,8 @@ class GilbParser:
 
 def analyze_source(src: str) -> dict:
     clean = strip_comments_and_literals(src)
+    clean = re.sub(r'^\s*#.*$', ' ', clean, flags=re.MULTILINE)
+    clean = re.sub(r'\busing\s+namespace\b[^;]*;', ' ', clean)
     tokens = tokenize(clean)
     parser = GilbParser(tokens)
     parser.parse_program()

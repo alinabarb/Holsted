@@ -51,7 +51,7 @@ string colorName(Color c) {
 }
 
 int main() {
-    // --- if / else if / else ---
+
     int a = 15;
     if (a % 15 == 0) {
         cout << "FizzBuzz" << endl;
