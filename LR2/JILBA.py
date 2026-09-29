@@ -1,5 +1,6 @@
 import re
-import sys
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 
 _COMMENT_OR_LITERAL = re.compile(
@@ -12,7 +13,7 @@ _COMMENT_OR_LITERAL = re.compile(
 
 
 def strip_comments_and_literals(src: str) -> str:
-    def _repl(m: "re.Match[str]") -> str:
+    def _repl(m):
         s = m.group(0)
         if s.startswith('//') or s.startswith('/*'):
             return ' '
@@ -231,19 +232,144 @@ def analyze_source(src: str) -> dict:
     }
 
 
-def analyze_file(path: str) -> dict:
-    with open(path, encoding='utf-8') as f:
-        return analyze_source(f.read())
+# ---------------- GUI ----------------
+
+class GilbApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Анализ сложности C++ программы (метрика Гилба)")
+        self.root.geometry("950x700")
+        self.root.minsize(750, 550)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # Верхняя панель с кнопками
+        top_frame = ttk.Frame(self.root, padding=8)
+        top_frame.pack(fill=tk.X)
+
+        ttk.Button(top_frame, text="Открыть .cpp файл",
+                   command=self.open_file).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_frame, text="Очистить",
+                   command=self.clear_all).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(top_frame, text="Анализировать",
+                   command=self.analyze).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.file_label = ttk.Label(top_frame, text="Файл не выбран",
+                                    foreground="gray")
+        self.file_label.pack(side=tk.LEFT, padx=12)
+
+        # Метка и поле с исходным кодом
+        ttk.Label(self.root, text="Исходный код C++:",
+                  padding=(8, 4, 8, 0)).pack(anchor=tk.W)
+
+        code_frame = ttk.Frame(self.root, padding=(8, 0, 8, 8))
+        code_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.code_text = scrolledtext.ScrolledText(
+            code_frame, wrap=tk.NONE, font=("Consolas", 10),
+            undo=True
+        )
+        self.code_text.pack(fill=tk.BOTH, expand=True)
+
+        # Панель результатов
+        result_frame = ttk.LabelFrame(self.root, text="Результат работы парсера",
+                                      padding=10)
+        result_frame.pack(fill=tk.X, padx=8, pady=(0, 10))
+
+        self.cl_var = tk.StringVar(value="—")
+        self.cl_rel_var = tk.StringVar(value="—")
+        self.cli_var = tk.StringVar(value="—")
+        self.total_var = tk.StringVar(value="—")
+
+        def add_row(row, label, var, color="#1a4d8f"):
+            ttk.Label(result_frame, text=label,
+                      font=("Segoe UI", 10)).grid(
+                row=row, column=0, sticky=tk.W, padx=(0, 12), pady=3)
+            ttk.Label(result_frame, textvariable=var,
+                      font=("Segoe UI", 11, "bold"),
+                      foreground=color).grid(
+                row=row, column=1, sticky=tk.W, pady=3)
+
+        add_row(0, "Абсолютная сложность программы (CL):",
+                self.cl_var, "#1a4d8f")
+        add_row(1, "Относительная сложность программы (cl):",
+                self.cl_rel_var, "#1a4d8f")
+        add_row(2, "Максимальный уровень вложенности (CLI):",
+                self.cli_var, "#8f1a1a")
+        add_row(3, "Общее число операторов программы:",
+                self.total_var, "#555555")
+
+    # ------------- действия -------------
+
+    def open_file(self):
+        path = filedialog.askopenfilename(
+            title="Выберите .cpp файл",
+            filetypes=[("C++ файлы", "*.cpp *.cc *.cxx *.c++ *.h *.hpp"),
+                       ("Все файлы", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            try:
+                with open(path, encoding='cp1251') as f:
+                    content = f.read()
+            except Exception as e:
+                messagebox.showerror("Ошибка",
+                                     f"Не удалось прочитать файл:\n{e}")
+                return
+        except Exception as e:
+            messagebox.showerror("Ошибка",
+                                 f"Не удалось открыть файл:\n{e}")
+            return
+
+        self.code_text.delete("1.0", tk.END)
+        self.code_text.insert("1.0", content)
+        self.file_label.config(text=path, foreground="black")
+
+    def clear_all(self):
+        self.code_text.delete("1.0", tk.END)
+        self.file_label.config(text="Файл не выбран", foreground="gray")
+        for var in (self.cl_var, self.cl_rel_var,
+                    self.cli_var, self.total_var):
+            var.set("—")
+
+    def analyze(self):
+        src = self.code_text.get("1.0", tk.END)
+        if not src.strip():
+            messagebox.showwarning("Внимание",
+                                   "Введите код или откройте файл.")
+            return
+        try:
+            result = analyze_source(src)
+        except Exception as e:
+            messagebox.showerror("Ошибка анализа",
+                                 f"Не удалось выполнить анализ:\n{e}")
+            return
+
+        self.cl_var.set(str(result['CL']))
+        self.cl_rel_var.set(str(result['cl']))
+        self.cli_var.set(str(result['CLI']))
+        self.total_var.set(str(result['total_operators']))
+
+
+def main():
+    root = tk.Tk()
+    try:
+        style = ttk.Style()
+        if "vista" in style.theme_names():
+            style.theme_use("vista")
+        elif "clam" in style.theme_names():
+            style.theme_use("clam")
+    except Exception:
+        pass
+
+    GilbApp(root)
+    root.mainloop()
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        cpp_path = sys.argv[1]
-    else:
-        cpp_path = input('Введите путь к .cpp файлу: ').strip().strip('"')
-
-    result = analyze_file(cpp_path)
-    print(f"Абсолютная сложность программы (CL)        = {result['CL']}")
-    print(f"Относительная сложность программы (cl)      = {result['cl']}")
-    print(f"Максимальный уровень вложенности (CLI)      = {result['CLI']}")
-    print(f"(общее число операторов программы: {result['total_operators']})")
+    main()
