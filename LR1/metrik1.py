@@ -118,7 +118,7 @@ def calculate_metrics(operators, operands):
 
 if __name__ == '__main__':
     # открываем файл с кодом С++ на чтение
-    with open('syntaxC++.cpp', 'r', encoding='utf-8') as file:
+    with open('../syntaxC++.cpp', 'r', encoding='utf-8') as file:
         cpp_code = file.read()
 
     ops, opds = parsecpp(cpp_code)
