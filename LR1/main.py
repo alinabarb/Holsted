@@ -22,18 +22,11 @@ def calculate_metrics(operators, operands):
     # объем (защита от логарифма нуля, если код пустой)
     V = N * log2(n) if n > 0 else 0
 
-    # расширенные метрики по формулам из методы
-    # если операндов нет, ставим 0, чтобы не словить ошибку деления на ноль
-    D = (n1 / 2) * (N2 / n2) if n2 > 0 else 0 
-    E = D * V
-    T = E / 18 # 18 - это число Струда для времени
-
     # возвращаем словарик, сразу всё округляем до целых (int), чтобы без точек
     return {
         "n1": int(n1), "n2": int(n2),
         "N1": int(N1), "N2": int(N2),
         "n": int(n), "N": int(N), "V": int(V),
-        "D": int(D), "E": int(E), "T": int(T)
     }
 
 
@@ -128,12 +121,6 @@ class HalsteadApp:
         )
         self.lbl_basic.pack(side="left", fill="x", expand=True)
 
-        self.lbl_extended = ttk.Label(
-            metrics_frame,
-            text="Расширенные метрики:\nСложность D = ...\nТрудоемкость E = ...\nВремя T = ...",
-            justify="left", font=("Helvetica Neue", 12)
-        )
-        self.lbl_extended.pack(side="left", fill="x", expand=True)
 
     def load_file(self):
         # диалог выбора файла
@@ -208,15 +195,6 @@ class HalsteadApp:
             )
         )
 
-        self.lbl_extended.config(
-            text=(
-                "Расширенные метрики:\n"
-                f"Сложность D = {m['D']}\n"
-                f"Трудоемкость E = {m['E']}\n"
-                f"Время T = {m['T']} сек"
-            )
-        )
-
     def reset_all(self):
         # сбрасываем вообще всё
         self.code_text.delete("1.0", tk.END)
@@ -228,7 +206,6 @@ class HalsteadApp:
             self.tree_opd.delete(row)
 
         self.lbl_basic.config(text="Словарь программы η = ...\nДлина программы N = ...\nОбъем программы V = ...")
-        self.lbl_extended.config(text="Расширенные метрики:\nСложность D = ...\nТрудоемкость E = ...\nВремя T = ...")
 
         self.operators.clear()
         self.operands.clear()
