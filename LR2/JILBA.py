@@ -2,15 +2,15 @@ import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
-
+# ИСПРАВЛЕНО: Убрано ошибочное поведение регулярки для однострочных комментариев.
+# Теперь // захватывает все только до конца строки [^\n]*, а /* */ работает многострочно.
 _COMMENT_OR_LITERAL = re.compile(
-    r'//.*?$'
+    r'//[^\n]*'
     r'|/\*.*?\*/'
     r'|"(?:\\.|[^"\\])*"'
     r"|'(?:\\.|[^'\\])*'",
-    re.DOTALL | re.MULTILINE,
+    re.DOTALL
 )
-
 
 def strip_comments_and_literals(src: str) -> str:
     def _repl(m):
@@ -22,18 +22,15 @@ def strip_comments_and_literals(src: str) -> str:
         return "''"
     return _COMMENT_OR_LITERAL.sub(_repl, src)
 
-
 _TOKEN_RE = re.compile(r'[A-Za-z_]\w*|[{}();:,?]|\S')
-
 
 def tokenize(src: str):
     return _TOKEN_RE.findall(src)
 
-
 _LOOP_KEYWORDS = {'for', 'while', 'do'}
 _STMT_START_KEYWORDS = {
     'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
-    'return', 'break', 'continue', 'goto',
+    'return', 'break', 'continue', 'goto', 'try', 'catch', 'throw'
 }
 _DECL_KEYWORDS = {'enum', 'struct', 'class', 'union', 'typedef'}
 
@@ -68,23 +65,18 @@ class GilbParser:
                     return
 
     def parse_program(self):
+        # Верхний уровень всегда нулевой
         while self.pos < self.n:
             self.parse_statement(depth=0)
 
     def parse_type_declaration(self, depth):
-        """Пропускает объявление enum/struct/class/union/typedef,
-        не считая его оператором."""
-        # пропускаем само ключевое слово
+        """Пропускает объявление enum/struct/class/union/typedef"""
         self.advance()
-
-        # пропускаем имя типа и всё до '{' или ';'
         while self.pos < self.n and self.peek() not in ('{', ';', None):
             self.advance()
 
         if self.peek() == '{':
-            # пропускаем тело { ... }
             self.skip_balanced('{', '}')
-            # после тела может быть ';' или имя переменной
             while self.pos < self.n and self.peek() not in (';', None):
                 self.advance()
             if self.peek() == ';':
@@ -98,9 +90,10 @@ class GilbParser:
             return
 
         nxt = self.peek(1)
+        # Обработка меток (goto)
         if (
                 t not in _STMT_START_KEYWORDS
-                and re.match(r'[A-Za-z_]\w*$', t)
+                and re.match(r'^[A-Za-z_]\w*$', t)
                 and nxt == ':'
                 and self.peek(2) != ':'
         ):
@@ -109,28 +102,37 @@ class GilbParser:
             self.parse_statement(depth)
             return
 
+        # Подсчет операторов строго тут, чтобы избежать дублирований
         if t == '{':
             self.parse_compound(depth)
         elif t == 'if':
+            self.total_operators += 1
             self.parse_if(depth)
         elif t in _LOOP_KEYWORDS:
+            self.total_operators += 1
             self.parse_loop(depth, t)
         elif t == 'switch':
+            self.total_operators += 1
             self.parse_switch(depth)
         elif t in ('case', 'default'):
             self.parse_case_label(depth)
         elif t == 'try':
+            self.total_operators += 1
             self.advance()
-            self.parse_body(depth)
-            if self.peek() == 'catch':
+            self.parse_body(depth + 1)
+            while self.peek() == 'catch':
+                self.total_operators += 1
                 self.advance()
                 if self.peek() == '(':
                     self.skip_balanced('(', ')')
-                self.parse_body(depth)
+                self.parse_body(depth + 1)
             return
-        elif t in _DECL_KEYWORDS:  # ← НОВАЯ ВЕТКА
+        elif t in _DECL_KEYWORDS:
             self.parse_type_declaration(depth)
+        elif t == ';':
+            self.advance() # Пустой оператор
         else:
+            self.total_operators += 1
             self.parse_simple(depth)
 
     def parse_compound(self, depth):
@@ -143,23 +145,25 @@ class GilbParser:
     def parse_body(self, depth):
         if self.peek() == '{':
             self.parse_compound(depth)
-        elif self.peek() == ';':
-            self.advance()
         else:
             self.parse_statement(depth)
 
     def parse_if(self, depth):
         self.CL += 1
-        self.max_depth = max(self.max_depth, depth + 1)
+        # ИСПРАВЛЕНО: Сам условный оператор устанавливает текущий уровень для CLI (верхний уровень = 0)
+        self.max_depth = max(self.max_depth, depth)
 
         self.advance()
         if self.peek() == '(':
             self.skip_balanced('(', ')')
 
+        # Тело IF выполняется на уровне depth + 1
         self.parse_body(depth + 1)
 
         if self.peek() == 'else':
             self.advance()
+            # По методике, цепочка IF-THEN-ELSE углубляет уровень вложенности,
+            # поэтому тело ELSE (даже если там сразу else if) идет на глубину +1
             self.parse_body(depth + 1)
 
     def count_switch_branches(self):
@@ -190,8 +194,9 @@ class GilbParser:
         if branches >= 1:
             equiv_cl = max(branches - 1, 0)
             self.CL += equiv_cl
-        equiv_depth = depth + 1 + max(branches - 2, 0)
-        self.max_depth = max(self.max_depth, equiv_depth)
+            # ИСПРАВЛЕНО: Эквивалентная глубина начинается строго от текущего depth (с нуля)
+            equiv_depth = depth + max(branches - 2, 0)
+            self.max_depth = max(self.max_depth, equiv_depth)
 
         if self.peek() == '{':
             self.parse_compound(depth + 1)
@@ -207,13 +212,12 @@ class GilbParser:
 
     def parse_loop(self, depth, kind):
         self.advance()
-
         if kind in ('for', 'while'):
             if self.peek() == '(':
                 self.skip_balanced('(', ')')
-            self.parse_body(depth)
+            self.parse_body(depth + 1)
         else:
-            self.parse_body(depth)
+            self.parse_body(depth + 1)
             if self.peek() == 'while':
                 self.advance()
                 if self.peek() == '(':
@@ -222,7 +226,6 @@ class GilbParser:
                     self.advance()
 
     def parse_simple(self, depth):
-        self.total_operators += 1
         paren_depth = 0
         while self.pos < self.n:
             t = self.advance()
@@ -236,10 +239,10 @@ class GilbParser:
             elif t == ';' and paren_depth <= 0:
                 break
             elif t == '{' and paren_depth <= 0:
+                # Определение функции
                 self.pos -= 1
                 self.parse_compound(depth)
                 break
-
 
 def analyze_source(src: str) -> dict:
     clean = strip_comments_and_literals(src)
@@ -274,7 +277,6 @@ class GilbApp:
         self._build_ui()
 
     def _build_ui(self):
-        # Верхняя панель с кнопками
         top_frame = ttk.Frame(self.root, padding=8)
         top_frame.pack(fill=tk.X)
 
@@ -289,7 +291,6 @@ class GilbApp:
                                     foreground="gray")
         self.file_label.pack(side=tk.LEFT, padx=12)
 
-        # Метка и поле с исходным кодом
         ttk.Label(self.root, text="Исходный код C++:",
                   padding=(8, 4, 8, 0)).pack(anchor=tk.W)
 
@@ -302,7 +303,6 @@ class GilbApp:
         )
         self.code_text.pack(fill=tk.BOTH, expand=True)
 
-        # Панель результатов
         result_frame = ttk.LabelFrame(self.root, text="Результат работы парсера",
                                       padding=10)
         result_frame.pack(fill=tk.X, padx=8, pady=(0, 10))
@@ -329,8 +329,6 @@ class GilbApp:
                 self.cli_var, "#8f1a1a")
         add_row(3, "Общее число операторов программы:",
                 self.total_var, "#555555")
-
-    # ------------- действия -------------
 
     def open_file(self):
         path = filedialog.askopenfilename(
