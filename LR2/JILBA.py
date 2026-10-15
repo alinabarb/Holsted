@@ -211,6 +211,9 @@ class GilbParser:
             self.advance()
 
     def parse_loop(self, depth, kind):
+        self.CL += 1
+        self.max_depth = max(self.max_depth, depth)
+
         self.advance()
         if kind in ('for', 'while'):
             if self.peek() == '(':
